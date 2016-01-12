@@ -3,16 +3,16 @@
 // 1. create iframe pointing to script on jsconsole.com domain
 // 2. create console object with: log, dir, etc?
 // 3. console.log runs postMessage with json.stringified content
-// 4. jsconsole.com/remote/?id.onMessage = send to server, and wait for response. 
+// 4. jsconsole.com/remote/?id.onMessage = send to server, and wait for response.
 
 function sortci(a, b) {
   return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
 }
 
 // from console.js
-function stringify(o, simple) {
+function stringify2(o, simple) {
   var json = '', i, type = ({}).toString.call(o), parts = [], names = [];
-  
+
   if (type == '[object String]') {
     json = '"' + o.replace(/\n/g, '\\n').replace(/"/g, '\\"') + '"';
   } else if (type == '[object Array]') {
@@ -60,6 +60,86 @@ function stringify(o, simple) {
   return json;
 }
 
+// custom because I want to be able to introspect native browser objects *and* functions
+function stringify(o, simple, visited) {
+  var json = '', i, vi, type = '', parts = [], names = [], circular = false;
+  visited = visited || [];
+
+  try {
+    type = ({}).toString.call(o);
+  } catch (e) { // only happens when typeof is protected (...randomly)
+    type = '[object Object]';
+  }
+
+  // check for circular references
+  for (vi = 0; vi < visited.length; vi++) {
+    if (o === visited[vi]) {
+      circular = true;
+      break;
+    }
+  }
+
+  if (circular) {
+    json = '[circular]';
+  } else if (type == '[object String]') {
+    json = '"' + o.replace(/"/g, '\\"') + '"';
+  } else if (type == '[object Array]') {
+    visited.push(o);
+
+    json = '[';
+    for (i = 0; i < o.length; i++) {
+      parts.push(stringify(o[i], simple, visited));
+    }
+    json += parts.join(', ') + ']';
+    json;
+  } else if (type == '[object Object]') {
+    visited.push(o);
+
+    json = '{';
+    for (i in o) {
+      names.push(i);
+    }
+    names.sort(sortci);
+    for (i = 0; i < names.length; i++) {
+      parts.push( stringify(names[i], undefined, visited) + ': ' + stringify(o[ names[i] ], simple, visited) );
+    }
+    json += parts.join(', ') + '}';
+  } else if (type == '[object Number]') {
+    json = o+'';
+  } else if (type == '[object Boolean]') {
+    json = o ? 'true' : 'false';
+  } else if (type == '[object Function]') {
+    json = o.toString();
+  } else if (o === null) {
+    json = 'null';
+  } else if (o === undefined) {
+    json = 'undefined';
+  } else if (simple == undefined) {
+    visited.push(o);
+
+    json = type + '{\n';
+    for (i in o) {
+      names.push(i);
+    }
+    names.sort(sortci);
+    for (i = 0; i < names.length; i++) {
+      try {
+        parts.push(names[i] + ': ' + stringify(o[names[i]], true, visited)); // safety from max stack
+      } catch (e) {
+        if (e.name == 'NS_ERROR_NOT_IMPLEMENTED') {
+          // do nothing - not sure it's useful to show this error when the variable is protected
+          // parts.push(names[i] + ': NS_ERROR_NOT_IMPLEMENTED');
+        }
+      }
+    }
+    json += parts.join(',\n') + '\n}';
+  } else {
+    try {
+      json = o+''; // should look like an object
+    } catch (e) {}
+  }
+  return json;
+}
 
 // Plugins that inject are screwing this up :(
 // function getLastChild(el) {
@@ -75,7 +155,7 @@ function getRemoteScript() {
       break;
     }
   }
-  
+
   return remoteScript;
 }
 
@@ -83,7 +163,7 @@ var last = getRemoteScript();
 
 // if (last.getAttribute('id') == '_firebugConsole') { // if Firebug is open, this all goes to crap
 //   last = last.previousElementSibling;
-// } 
+// }
 
 var lastSrc = last.getAttribute('src'),
     id = lastSrc.replace(/.*\?/, ''),
@@ -132,7 +212,7 @@ var remote = {
     } else {
       queue.push(msg);
     }
-    
+
     msgType = '';
   },
   info: function () {
@@ -186,9 +266,9 @@ remote.warn = remote.info;
 remoteFrame.onload = function () {
   remoteWindow = remoteFrame.contentWindow;
   remoteWindow.postMessage('__init__', origin);
-  
+
   remoteWindow.postMessage(stringify({ response: 'Connection established with ' + window.location.toString() + '\n' + navigator.userAgent, type: 'info' }), origin);
-  
+
   for (var i = 0; i < queue.length; i++) {
     remoteWindow.postMessage(queue[i], origin);
   }
